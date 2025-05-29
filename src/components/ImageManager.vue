@@ -68,25 +68,63 @@
       <a-spin :spinning="loading">
         <!-- 列表视图 -->
         <div v-if="viewMode === 'list'" class="list-view">
-          <a-table
-            :data-source="filteredImages"
-            size="small"
-            :row-selection="{ 
-              selectedRowKeys: selectedRowKeys, 
-              onChange: onSelectChange,
-              onSelectAll: onSelectAll,
-              type: 'checkbox',
-              getCheckboxProps: (record) => ({
-                onClick: (e) => e.stopPropagation()
-              })
-            }"
-            @row-click="handleRowClick"
-            :scroll="{ y: 'calc(100vh - 420px)' }"
-            :pagination="false"
-            :row-class-name="getRowClassName"
-            :columns="columns"
-            class="gray-table"
-          />
+          <div class="modern-table">
+            <!-- 表格头部 -->
+            <div class="table-header">
+              <div class="header-cell checkbox-cell">
+                <a-checkbox 
+                  :indeterminate="selectedRowKeys.length > 0 && selectedRowKeys.length < paginatedImages.length"
+                  :checked="isAllSelected"
+                  @change="onSelectAll"
+                />
+              </div>
+              <div class="header-cell date-cell">日期</div>
+              <div class="header-cell serial-cell">序号</div>
+              <div class="header-cell defect-cell">缺陷</div>
+              <div class="header-cell status-cell">审核</div>
+            </div>
+            
+            <!-- 表格内容 -->
+            <div class="table-body">
+              <div 
+                v-for="image in paginatedImages" 
+                :key="image.id"
+                class="table-row"
+                :class="{ 'selected': selectedRowKeys.includes(image.id) }"
+                @click="handleRowClick(image)"
+              >
+                <div class="body-cell checkbox-cell">
+                  <a-checkbox 
+                    :checked="selectedRowKeys.includes(image.id)"
+                    @change="(e) => toggleImageSelection(image.id, e.target.checked)"
+                    @click.stop
+                  />
+                </div>
+                <div class="body-cell date-cell">{{ formatDate(image.uploadDate) }}</div>
+                <div class="body-cell serial-cell">{{ image.serialNumber }}</div>
+                <div class="body-cell defect-cell">
+                  <div class="defect-indicators">
+                    <span 
+                      v-for="defect in image.defects" 
+                      :key="defect.type"
+                      :class="`defect-indicator defect-${defect.type}`"
+                      :title="getDefectName(defect.type)"
+                    >
+                      {{ getDefectAbbr(defect.type) }}
+                    </span>
+                  </div>
+                </div>
+                <div class="body-cell status-cell">
+                   <a-tag
+                     :color="getStatusTagColor(image.reviewStatus)"
+                     size="small"
+                   >
+                     {{ getStatusText(image.reviewStatus) }}
+                   </a-tag>
+                 </div>
+              </div>
+            </div>
+          </div>
         </div>
 
         <!-- 网格视图 -->
@@ -135,11 +173,11 @@
         <a-input-number 
           v-model:value="currentPage" 
           :min="1" 
-          :max="Math.ceil(totalImages / pageSize)"
+          :max="totalPages"
           size="small"
           style="width: 60px; margin: 0 4px;"
         />
-        <span>页/共{{ Math.ceil(totalImages / pageSize) }}页</span>
+        <span>页/共{{ totalPages }}页</span>
         <div class="page-numbers">
           <a-button 
             size="small" 
@@ -155,8 +193,8 @@
           >{{ page }}</a-button>
           <a-button 
             size="small" 
-            @click="currentPage = Math.min(Math.ceil(totalImages / pageSize), currentPage + 1)"
-            :disabled="currentPage === Math.ceil(totalImages / pageSize)"
+            @click="currentPage = Math.min(totalPages, currentPage + 1)"
+            :disabled="currentPage === totalPages"
           >&gt;</a-button>
         </div>
       </div>
@@ -221,7 +259,7 @@
 </template>
 
 <script>
-import { ref, reactive, computed, onMounted, h } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted, h } from 'vue'
 import { message, Modal } from 'ant-design-vue'
 import {
   SearchOutlined,
@@ -655,6 +693,47 @@ export default {
       return result
     })
 
+    // 计算每页可显示的行数（基于可用高度）
+    const rowsPerPage = computed(() => {
+      // 假设每行高度为 48px，表头高度为 48px，其他UI元素占用约 420px
+      const availableHeight = window.innerHeight - 420
+      const tableHeaderHeight = 48
+      const rowHeight = 48
+      const maxRows = Math.floor((availableHeight - tableHeaderHeight) / rowHeight)
+      return Math.max(5, maxRows) // 最少显示5行
+    })
+
+    // 分页后的图片数据
+    const paginatedImages = computed(() => {
+      const start = (currentPage.value - 1) * rowsPerPage.value
+      const end = start + rowsPerPage.value
+      return filteredImages.value.slice(start, end)
+    })
+
+    // 总页数
+    const totalPages = computed(() => {
+      return Math.ceil(filteredImages.value.length / rowsPerPage.value)
+    })
+
+    // 全选状态计算
+    const isAllSelected = computed(() => {
+      if (paginatedImages.value.length === 0) return false
+      return paginatedImages.value.every(img => selectedRowKeys.value.includes(img.id))
+    })
+
+    // 监听窗口大小变化
+    const updateRowsPerPage = () => {
+      // 触发rowsPerPage的重新计算
+    }
+
+    onMounted(() => {
+      window.addEventListener('resize', updateRowsPerPage)
+    })
+
+    onUnmounted(() => {
+      window.removeEventListener('resize', updateRowsPerPage)
+    })
+
     // 选择图片
     const selectImage = (image) => {
       selectedImage.value = image
@@ -678,14 +757,15 @@ export default {
     }
 
     // 全选处理
-    const onSelectAll = (selected, selectedRows, changeRows) => {
-      if (selected) {
+    const onSelectAll = (e) => {
+      const checked = e.target.checked
+      if (checked) {
         // 全选当前页的所有图片
-        const currentPageIds = filteredImages.value.map(img => img.id)
+        const currentPageIds = paginatedImages.value.map(img => img.id)
         selectedRowKeys.value = [...new Set([...selectedRowKeys.value, ...currentPageIds])]
       } else {
         // 取消选择当前页的所有图片
-        const currentPageIds = filteredImages.value.map(img => img.id)
+        const currentPageIds = paginatedImages.value.map(img => img.id)
         selectedRowKeys.value = selectedRowKeys.value.filter(id => !currentPageIds.includes(id))
       }
     }
@@ -923,9 +1003,13 @@ export default {
       filters,
       images,
       filteredImages,
+      paginatedImages,
       currentPage,
       pageSize,
       totalImages,
+      rowsPerPage,
+      totalPages,
+      isAllSelected,
       selectedRowKeys,
       columns,
       selectImage,
@@ -1026,6 +1110,89 @@ export default {
 .list-view::-webkit-scrollbar-thumb:hover,
 .grid-view::-webkit-scrollbar-thumb:hover {
   background: #a8a8a8;
+}
+
+/* 现代化表格样式 */
+.modern-table {
+  background: #fff;
+  border-radius: 8px;
+  border: 1px solid #e8e8e8;
+  overflow: hidden;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.06);
+}
+
+.table-header {
+  display: grid;
+  grid-template-columns: 40px 80px 60px 1fr 80px;
+  background: #fafafa;
+  border-bottom: 1px solid #e8e8e8;
+  font-weight: 500;
+  font-size: 12px;
+  color: #262626;
+}
+
+.table-body {
+  max-height: calc(100vh - 420px);
+  overflow-y: auto;
+}
+
+.table-row {
+  display: grid;
+  grid-template-columns: 40px 80px 60px 1fr 80px;
+  border-bottom: 1px solid #f0f0f0;
+  transition: all 0.2s;
+  cursor: pointer;
+}
+
+.table-row:hover {
+  background-color: #f5f5f5;
+}
+
+.table-row.selected {
+  background-color: #e6f7ff;
+}
+
+.table-row:last-child {
+  border-bottom: none;
+}
+
+.header-cell,
+.body-cell {
+  padding: 12px 8px;
+  display: flex;
+  align-items: center;
+  font-size: 12px;
+  border-right: 1px solid #f0f0f0;
+}
+
+.header-cell:last-child,
+.body-cell:last-child {
+  border-right: none;
+}
+
+.checkbox-cell {
+  justify-content: center;
+}
+
+.date-cell {
+  color: #666;
+}
+
+.serial-cell {
+  font-weight: 500;
+  color: #262626;
+}
+
+.defect-cell {
+  justify-content: flex-start;
+}
+
+.status-cell {
+  justify-content: center;
+}
+
+.action-cell {
+  justify-content: center;
 }
 
 .image-card {
